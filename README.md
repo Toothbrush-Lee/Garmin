@@ -93,7 +93,23 @@ dist\fit-analyzer.exe demo\fit --out output\demo --timezone Asia/Shanghai
 .github/workflows/build-binaries.yml
 ```
 
-把项目推到 GitHub 后，可以手动触发 `Build binaries` workflow，或打 `v*` tag 自动触发。它会分别在 Linux、macOS、Windows runner 上构建并上传 artifacts。
+把项目推到 GitHub 后，可以手动触发 `Build binaries` workflow，或打 `v*` tag 自动触发。
+
+- 手动触发：分别在 Linux、macOS、Windows runner 上构建，并上传临时 artifacts。
+- 推送 `v*` tag：构建完成后自动创建或更新同名 GitHub Release，并把三端压缩包挂到 Release assets。
+
+发布一个新版本的例子：
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+tag 推送后，GitHub Actions 会生成类似下面的 Release 文件：
+
+- `fit-analyzer-Linux-X64.tar.gz`
+- `fit-analyzer-macOS-ARM64.tar.gz` 或 `fit-analyzer-macOS-X64.tar.gz`
+- `fit-analyzer-Windows-X64.zip`
 
 ## Demo 文件
 
