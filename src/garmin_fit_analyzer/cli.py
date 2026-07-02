@@ -507,7 +507,7 @@ def write_gpx(
     link = ET.SubElement(
         metadata,
         gpx_tag("link"),
-        {"href": "https://github.com/Toothbrush-Lee/Garmin"},
+        {"href": "https://github.com/Toothbrush-Lee/garmin-fit-analyzer"},
     )
     ET.SubElement(link, gpx_tag("text")).text = "Garmin FIT Analyzer"
     if (time_text := format_gpx_time(metadata_time)) is not None:

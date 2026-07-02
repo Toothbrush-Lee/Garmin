@@ -16,7 +16,7 @@ License: MIT
 
 普通用户不需要安装 Python，也不需要安装 uv。到 Releases 页面下载自己系统对应的压缩包，解压后运行 `fit-analyzer`，后面加上 FIT 文件或文件夹地址即可。
 
-下载地址：<https://github.com/Toothbrush-Lee/Garmin/releases>
+下载地址：<https://github.com/Toothbrush-Lee/garmin-fit-analyzer/releases>
 
 ### macOS / Linux
 
@@ -201,7 +201,7 @@ tag 推送后，GitHub Actions 会生成类似下面的 Release 文件：
 
 运行前建议先确认：
 
-- 只从本仓库的 GitHub Releases 下载：<https://github.com/Toothbrush-Lee/Garmin/releases>
+- 只从本仓库的 GitHub Releases 下载：<https://github.com/Toothbrush-Lee/garmin-fit-analyzer/releases>
 - 下载的文件名和版本号符合预期，例如 `v0.2.0`。
 - 如果你不信任预构建二进制，可以直接从源码构建：`uv run --group build python scripts/build_binary.py`。
 
