@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import html
 import json
 import math
 import statistics
@@ -36,15 +37,27 @@ ET.register_namespace("gpxtpx", GPX_TPX_NS)
 ET.register_namespace("xsi", XSI_NS)
 
 
+DEFAULT_FORMATS = {"summary", "report", "html", "records", "laps", "gpx"}
+FORMAT_ALIASES = {
+    "all": DEFAULT_FORMATS,
+    "json": {"summary"},
+    "md": {"report"},
+    "markdown": {"report"},
+    "csv": {"records", "laps"},
+}
+FORMAT_CHOICES = DEFAULT_FORMATS | set(FORMAT_ALIASES)
+
+
 @dataclass(frozen=True)
 class ConversionResult:
     fit_path: Path
     out_dir: Path
-    summary_path: Path
-    report_path: Path
-    records_path: Path
-    laps_path: Path
-    gpx_path: Path
+    summary_path: Path | None = None
+    report_path: Path | None = None
+    html_path: Path | None = None
+    records_path: Path | None = None
+    laps_path: Path | None = None
+    gpx_path: Path | None = None
     raw_path: Path | None = None
 
 
@@ -99,6 +112,29 @@ def clean_value(value: Any) -> Any:
     if isinstance(value, dict):
         return {str(key): clean_value(val) for key, val in value.items()}
     return value
+
+
+def parse_formats(raw_formats: str) -> set[str]:
+    requested = {
+        item.strip().lower()
+        for item in raw_formats.split(",")
+        if item.strip()
+    }
+    if not requested:
+        raise ValueError("No output formats were provided.")
+
+    unknown = requested - FORMAT_CHOICES
+    if unknown:
+        choices = ", ".join(sorted(FORMAT_CHOICES))
+        raise ValueError(
+            f"Unknown output format(s): {', '.join(sorted(unknown))}. "
+            f"Valid values: {choices}"
+        )
+
+    formats: set[str] = set()
+    for item in requested:
+        formats.update(FORMAT_ALIASES.get(item, {item}))
+    return formats
 
 
 def seconds_to_hms(seconds: float | int | None) -> str | None:
@@ -650,6 +686,289 @@ def markdown_report(summary: dict[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
+def html_text(value: Any) -> str:
+    if value is None:
+        return "n/a"
+    return html.escape(str(value))
+
+
+def html_metric(label: str, value: Any) -> str:
+    return (
+        '<div class="metric">'
+        f'<span class="metric-label">{html.escape(label)}</span>'
+        f'<strong>{html_text(value)}</strong>'
+        "</div>"
+    )
+
+
+def scale_svg_points(
+    points: list[tuple[float, float]],
+    width: int,
+    height: int,
+    padding: int,
+) -> str:
+    x_values = [point[0] for point in points]
+    y_values = [point[1] for point in points]
+    x_min, x_max = min(x_values), max(x_values)
+    y_min, y_max = min(y_values), max(y_values)
+    if x_min == x_max:
+        x_min -= 0.5
+        x_max += 0.5
+    if y_min == y_max:
+        y_min -= 0.5
+        y_max += 0.5
+
+    drawable_width = width - padding * 2
+    drawable_height = height - padding * 2
+    scaled = []
+    for x_value, y_value in points:
+        x = padding + (x_value - x_min) / (x_max - x_min) * drawable_width
+        y = height - padding - (y_value - y_min) / (y_max - y_min) * drawable_height
+        scaled.append(f"{x:.1f},{y:.1f}")
+    return " ".join(scaled)
+
+
+def svg_panel(
+    title: str,
+    points: list[tuple[float, float]],
+    stroke: str,
+    y_label: str,
+    width: int = 720,
+    height: int = 260,
+) -> str:
+    if len(points) < 2:
+        return (
+            '<section class="panel">'
+            f"<h2>{html.escape(title)}</h2>"
+            '<div class="empty">Not enough data.</div>'
+            "</section>"
+        )
+
+    padding = 32
+    polyline = scale_svg_points(points, width, height, padding)
+    y_values = [point[1] for point in points]
+    min_value = format_number(min(y_values), 1, "")
+    max_value = format_number(max(y_values), 1, "")
+    return f"""
+    <section class="panel">
+      <h2>{html.escape(title)}</h2>
+      <svg viewBox="0 0 {width} {height}" role="img" aria-label="{html.escape(title)}"
+        style="color: {html.escape(stroke)}">
+        <rect x="0" y="0" width="{width}" height="{height}" rx="8" />
+        <line x1="{padding}" y1="{height - padding}"
+          x2="{width - padding}" y2="{height - padding}" />
+        <line x1="{padding}" y1="{padding}" x2="{padding}" y2="{height - padding}" />
+        <polyline points="{polyline}" />
+        <text x="{padding}" y="{padding - 10}">{html.escape(y_label)} max {max_value}</text>
+        <text x="{padding}" y="{height - 8}">{html.escape(y_label)} min {min_value}</text>
+      </svg>
+    </section>
+    """
+
+
+def html_table(headers: list[str], rows: list[list[Any]]) -> str:
+    if not rows:
+        return '<div class="empty">No data.</div>'
+
+    header_html = "".join(f"<th>{html.escape(header)}</th>" for header in headers)
+    rows_html = []
+    for row in rows:
+        cells = "".join(f"<td>{html_text(cell)}</td>" for cell in row)
+        rows_html.append(f"<tr>{cells}</tr>")
+    return (
+        f"<table><thead><tr>{header_html}</tr></thead>"
+        f"<tbody>{''.join(rows_html)}</tbody></table>"
+    )
+
+
+def html_report(
+    summary: dict[str, Any],
+    record_rows: list[dict[str, Any]],
+    fit_path: Path,
+) -> str:
+    activity = summary["activity"]
+    records = summary["records"]
+    title = activity.get("sport_profile_name") or activity.get("sport") or fit_path.stem
+    route_points = [
+        (float(row["position_long_deg"]), float(row["position_lat_deg"]))
+        for row in record_rows
+        if isinstance(row.get("position_lat_deg"), (int, float))
+        and isinstance(row.get("position_long_deg"), (int, float))
+    ]
+    altitude_points = [
+        (float(row["elapsed_s"] or index), float(row["altitude_m"]))
+        for index, row in enumerate(record_rows)
+        if isinstance(row.get("altitude_m"), (int, float))
+    ]
+    heart_rate_points = [
+        (float(row["elapsed_s"] or index), float(row["heart_rate_bpm"]))
+        for index, row in enumerate(record_rows)
+        if isinstance(row.get("heart_rate_bpm"), (int, float))
+    ]
+    route_panel = svg_panel("Route Shape", route_points, "#227c70", "GPS")
+    altitude_panel = svg_panel("Altitude", altitude_points, "#5b6ee1", "m")
+    heart_rate_panel = svg_panel("Heart Rate", heart_rate_points, "#d1495b", "bpm")
+    zone_rows = [
+        [row.get("label"), row.get("duration"), format_number(row.get("percent"), 1, "%")]
+        for row in summary["heart_rate_zones"]
+    ]
+    lap_rows = [
+        [
+            row.get("lap"),
+            row.get("duration"),
+            format_number(row.get("distance_km"), 2, " km"),
+            format_number(row.get("avg_speed_kmh"), 2, " km/h"),
+            row.get("avg_hr_bpm"),
+            row.get("max_hr_bpm"),
+        ]
+        for row in summary["laps"]
+    ]
+
+    metrics = [
+        html_metric("Sport", title),
+        html_metric("Start", activity.get("start_time_local")),
+        html_metric("Duration", activity.get("duration")),
+        html_metric("Distance", format_number(activity.get("distance_km"), 2, " km")),
+        html_metric("Avg Speed", format_number(activity.get("avg_speed_kmh"), 2, " km/h")),
+        html_metric("Max Speed", format_number(activity.get("max_speed_kmh"), 2, " km/h")),
+        html_metric("Ascent", format_number(activity.get("ascent_m"), 0, " m")),
+        html_metric("Descent", format_number(activity.get("descent_m"), 0, " m")),
+        html_metric("Avg HR", format_number(activity.get("avg_hr_bpm"), 0, " bpm")),
+        html_metric("Max HR", format_number(activity.get("max_hr_bpm"), 0, " bpm")),
+        html_metric("FIT CRC", summary["sdk_decode"]["crc_integrity_ok"]),
+        html_metric("GPS Points", records.get("with_position")),
+    ]
+
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{html_text(title)} - Garmin FIT Analysis</title>
+  <style>
+    :root {{
+      color-scheme: light;
+      --ink: #1f2933;
+      --muted: #5f6b7a;
+      --line: #d9e2ec;
+      --panel: #ffffff;
+      --page: #f5f7fa;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      color: var(--ink);
+      background: var(--page);
+    }}
+    main {{
+      width: min(1120px, calc(100% - 32px));
+      margin: 0 auto;
+      padding: 32px 0;
+    }}
+    header {{
+      margin-bottom: 20px;
+    }}
+    h1, h2 {{
+      margin: 0;
+      font-weight: 700;
+      letter-spacing: 0;
+    }}
+    h1 {{ font-size: 28px; }}
+    h2 {{ font-size: 18px; margin-bottom: 12px; }}
+    .subtle {{ color: var(--muted); margin-top: 6px; }}
+    .metrics {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 10px;
+      margin: 20px 0;
+    }}
+    .metric, .panel {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 14px;
+    }}
+    .metric-label {{
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }}
+    .metric strong {{
+      display: block;
+      overflow-wrap: anywhere;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 12px;
+    }}
+    svg {{
+      width: 100%;
+      height: auto;
+      display: block;
+    }}
+    svg rect {{ fill: #fbfcfe; stroke: var(--line); }}
+    svg line {{ stroke: #c4ced9; stroke-width: 1; }}
+    svg polyline {{
+      fill: none;
+      stroke: currentColor;
+      stroke-width: 2.5;
+      stroke-linecap: round;
+      stroke-linejoin: round;
+    }}
+    svg text {{ fill: var(--muted); font-size: 12px; }}
+    .panel:nth-of-type(1) svg {{ color: #227c70; }}
+    .panel:nth-of-type(2) svg {{ color: #5b6ee1; }}
+    .panel:nth-of-type(3) svg {{ color: #d1495b; }}
+    table {{
+      width: 100%;
+      border-collapse: collapse;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      overflow: hidden;
+    }}
+    th, td {{
+      padding: 9px 10px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }}
+    th {{ color: var(--muted); font-size: 12px; }}
+    tr:last-child td {{ border-bottom: 0; }}
+    .empty {{
+      color: var(--muted);
+      padding: 20px;
+      border: 1px dashed var(--line);
+      border-radius: 8px;
+    }}
+    section {{ margin-top: 14px; }}
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <h1>{html_text(title)}</h1>
+      <div class="subtle">Generated from {html_text(fit_path.name)}</div>
+    </header>
+    <div class="metrics">{''.join(metrics)}</div>
+    <div class="grid">{route_panel}{altitude_panel}{heart_rate_panel}</div>
+    <section>
+      <h2>Heart Rate Zones</h2>
+      {html_table(["Zone", "Time", "Percent"], zone_rows)}
+    </section>
+    <section>
+      <h2>Laps</h2>
+      {html_table(["Lap", "Duration", "Distance", "Avg speed", "Avg HR", "Max HR"], lap_rows)}
+    </section>
+  </main>
+</body>
+</html>
+"""
+
+
 def discover_fit_files(inputs: list[Path], recursive: bool = True) -> list[Path]:
     fit_files: list[Path] = []
     for input_path in inputs:
@@ -695,25 +1014,30 @@ def convert_fit_file(
     fit_path: Path,
     out_dir: Path,
     tz: ZoneInfo,
+    formats: set[str] | None = None,
     raw_json: bool = False,
 ) -> ConversionResult:
     out_dir.mkdir(parents=True, exist_ok=True)
+    formats = DEFAULT_FORMATS if formats is None else formats
 
     messages, errors, integrity_ok = decode_fit(fit_path)
     summary = summarize(fit_path, messages, errors, integrity_ok, tz)
 
     stem = fit_path.stem
-    summary_path = out_dir / f"{stem}_summary.json"
-    report_path = out_dir / f"{stem}_report.md"
-    records_path = out_dir / f"{stem}_records.csv"
-    laps_path = out_dir / f"{stem}_laps.csv"
-    gpx_path = out_dir / f"{stem}.gpx"
+    summary_path = out_dir / f"{stem}_summary.json" if "summary" in formats else None
+    report_path = out_dir / f"{stem}_report.md" if "report" in formats else None
+    html_path = out_dir / f"{stem}_report.html" if "html" in formats else None
+    records_path = out_dir / f"{stem}_records.csv" if "records" in formats else None
+    laps_path = out_dir / f"{stem}_laps.csv" if "laps" in formats else None
+    gpx_path = out_dir / f"{stem}.gpx" if "gpx" in formats else None
 
-    summary_path.write_text(
-        json.dumps(clean_value(summary), ensure_ascii=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    report_path.write_text(markdown_report(summary), encoding="utf-8")
+    if summary_path:
+        summary_path.write_text(
+            json.dumps(clean_value(summary), ensure_ascii=False, indent=2) + "\n",
+            encoding="utf-8",
+        )
+    if report_path:
+        report_path.write_text(markdown_report(summary), encoding="utf-8")
 
     start_time = (messages.get("session_mesgs") or [{}])[0].get("start_time")
     record_rows, record_fieldnames = build_record_rows(
@@ -721,9 +1045,14 @@ def convert_fit_file(
         start_time if isinstance(start_time, datetime) else None,
         tz,
     )
-    write_csv(records_path, record_rows, record_fieldnames)
-    write_csv(laps_path, summary["laps"])
-    write_gpx(gpx_path, fit_path, messages)
+    if html_path:
+        html_path.write_text(html_report(summary, record_rows, fit_path), encoding="utf-8")
+    if records_path:
+        write_csv(records_path, record_rows, record_fieldnames)
+    if laps_path:
+        write_csv(laps_path, summary["laps"])
+    if gpx_path:
+        write_gpx(gpx_path, fit_path, messages)
 
     raw_path = None
     if raw_json:
@@ -738,6 +1067,7 @@ def convert_fit_file(
         out_dir=out_dir,
         summary_path=summary_path,
         report_path=report_path,
+        html_path=html_path,
         records_path=records_path,
         laps_path=laps_path,
         gpx_path=gpx_path,
@@ -765,6 +1095,14 @@ def parse_args() -> argparse.Namespace:
         "--timezone",
         default="Asia/Shanghai",
         help="IANA timezone used for local timestamps",
+    )
+    parser.add_argument(
+        "--formats",
+        default="all",
+        help=(
+            "Comma-separated outputs to write. Valid values: all, summary, report, "
+            "html, records, laps, gpx, json, md, csv. Default: all."
+        ),
     )
     parser.add_argument(
         "--no-recursive",
@@ -808,6 +1146,10 @@ def complete_args_interactively(args: argparse.Namespace) -> argparse.Namespace:
     if raw_timezone:
         args.timezone = raw_timezone
 
+    raw_formats = input(f"Output formats [{args.formats}]: ").strip()
+    if raw_formats:
+        args.formats = raw_formats
+
     raw_recursive = input("Search folders recursively? [Y/n]: ").strip().lower()
     if raw_recursive in {"n", "no"}:
         args.no_recursive = True
@@ -820,6 +1162,10 @@ def main() -> None:
     out_dir = args.out.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
     tz = ZoneInfo(args.timezone)
+    try:
+        formats = parse_formats(args.formats)
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
     fit_files = discover_fit_files(args.inputs, recursive=not args.no_recursive)
     batch_mode = len(fit_files) > 1 or any(
         path.expanduser().resolve().is_dir() for path in args.inputs
@@ -835,6 +1181,7 @@ def main() -> None:
                 fit_path=fit_path,
                 out_dir=file_out_dir,
                 tz=tz,
+                formats=formats,
                 raw_json=args.raw_json,
             )
         except Exception as exc:
@@ -842,11 +1189,16 @@ def main() -> None:
             print(f"  Failed: {exc}")
             continue
 
-        print(f"  Wrote {result.summary_path}")
-        print(f"  Wrote {result.report_path}")
-        print(f"  Wrote {result.records_path}")
-        print(f"  Wrote {result.laps_path}")
-        print(f"  Wrote {result.gpx_path}")
+        for path in (
+            result.summary_path,
+            result.report_path,
+            result.html_path,
+            result.records_path,
+            result.laps_path,
+            result.gpx_path,
+        ):
+            if path:
+                print(f"  Wrote {path}")
         if result.raw_path:
             print(f"  Wrote {result.raw_path}")
 

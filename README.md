@@ -8,6 +8,7 @@ License: MIT
 
 - `*_summary.json`: 结构化摘要
 - `*_report.md`: 人类可读报告
+- `*_report.html`: 离线可视化报告，包含路线轮廓、海拔曲线和心率曲线
 - `*_records.csv`: 逐点记录，包含时间、GPS、距离、速度、海拔、心率等
 - `*_laps.csv`: 分圈记录
 - `*.gpx`: 标准 GPX 轨迹文件，可导入地图软件或其他运动平台
@@ -85,6 +86,7 @@ Windows:
 
 - `*_summary.json`: 结构化摘要
 - `*_report.md`: 人类可读报告
+- `*_report.html`: 离线可视化报告，包含路线轮廓、海拔曲线和心率曲线
 - `*_records.csv`: 逐点记录，包含时间、GPS、距离、速度、海拔、心率等
 - `*_laps.csv`: 分圈记录
 - `*.gpx`: 标准 GPX 轨迹文件，包含经纬度、海拔、时间和心率扩展
@@ -103,16 +105,36 @@ Windows:
 .\fit-analyzer.exe "C:\Users\你的用户名\Downloads\activity.fit" --out "C:\Users\你的用户名\Desktop\fit-output"
 ```
 
+如果只想生成某一种或几种文件，可以加 `--formats`：
+
+```bash
+./fit-analyzer "/Users/你的用户名/Downloads/activity.fit" --formats gpx
+./fit-analyzer "/Users/你的用户名/Downloads/activity.fit" --formats html,gpx
+./fit-analyzer "/Users/你的用户名/Downloads/fit-files" --formats csv --out output/csv-only
+```
+
 ### 常用参数
 
 ```text
 --out <目录>          输出目录，默认 output
 --timezone <时区>     本地时间使用的 IANA 时区，默认 Asia/Shanghai
+--formats <格式>      输出格式，默认 all；可用 all、gpx、html、csv、json、md 等
 --raw-json           额外输出完整解码 JSON，可能包含隐私信息
 --no-recursive       输入是文件夹时，只转换该文件夹第一层的 .fit 文件
 ```
 
 如果直接运行 `fit-analyzer` 但不传文件地址，它会进入交互模式，提示你输入 FIT 文件或文件夹地址、输出目录和时区。
+
+## 这个项目适合谁？
+
+这个项目不是为了替代所有成熟工具。它的定位是：给不想折腾 Python、pip、Java 或复杂参数的普通用户，一个本地运行、下载即用的 Garmin FIT 批量转换器。
+
+- 如果你只想做专业 GPS 格式互转，可以优先看看 GPSBabel。
+- 如果你是 Python 开发者，只想把 FIT 转 GPX，可以看看 fit2gpx。
+- 如果你要调试 FIT 协议本身，Garmin 官方 FitCSVTool 更权威。
+- 如果你只是想把 Garmin `.fit` 文件本地转成 GPX、CSV、HTML 报告和摘要，这个工具会更直接。
+
+所有转换都在本机完成，不会上传 GPS 轨迹、设备信息或运动时间。
 
 ## 从源码运行
 
@@ -192,6 +214,7 @@ tag 推送后，GitHub Actions 会生成类似下面的 Release 文件：
 - `fit-analyzer-Linux-X64.tar.gz`
 - `fit-analyzer-macOS-ARM64.tar.gz` 或 `fit-analyzer-macOS-X64.tar.gz`
 - `fit-analyzer-Windows-X64.zip`
+- `SHA256SUMS.txt`
 
 ## 首次运行时的系统安全提示
 
@@ -202,7 +225,8 @@ tag 推送后，GitHub Actions 会生成类似下面的 Release 文件：
 运行前建议先确认：
 
 - 只从本仓库的 GitHub Releases 下载：<https://github.com/Toothbrush-Lee/garmin-fit-analyzer/releases>
-- 下载的文件名和版本号符合预期，例如 `v0.2.0`。
+- 下载的文件名和版本号符合预期，例如 `v0.3.0`。
+- 可以用 Release 里的 `SHA256SUMS.txt` 核对压缩包校验值。
 - 如果你不信任预构建二进制，可以直接从源码构建：`uv run --group build python scripts/build_binary.py`。
 
 ### macOS
